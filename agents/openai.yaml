@@ -1,0 +1,8 @@
+interface:
+  display_name: "VASP Linear-Response Hubbard U"
+  short_description: "Auditable VASP linear-response Hubbard U"
+  brand_color: "#2563EB"
+  default_prompt: "Use $vasp-hubbard-u to prepare and analyze a reproducible VASP linear-response Hubbard-U calculation."
+
+policy:
+  allow_implicit_invocation: true
