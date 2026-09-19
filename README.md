@@ -25,6 +25,15 @@ The skill treats the projected occupation as a PAW-projected observable, not an
 absolute orbital population. It also keeps the Reference, screened, and bare
 branches on the same input contract for fair comparison.
 
+Key safety constraints:
+
+- do not overwrite existing task, stage, or perturbation directories;
+- copy Reference `CHGCAR` and `WAVECAR` independently into every response point; do not use links;
+- record SHA256 hashes for PAW/input/restart evidence and verify copied restart files before submission;
+- keep `LMAXMIX = 4` for d targets or `LMAXMIX = 6` for f targets in Reference, screened, and bare stages;
+- create recurring monitoring only when the user explicitly asks for it;
+- use ordinary least squares by default and report leave-one-out sensitivity.
+
 ## Installation
 
 ### From a local copy

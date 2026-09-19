@@ -56,7 +56,7 @@ Do not print `POTCAR` contents. Record metadata only.
 Before preparing response points, record the calculation contract. Keep it identical across Reference, screened, and bare branches except for the tags that define the branch and the perturbation value:
 
 - structure and coordinate order;
-- PAW family, release, `TITEL`, `ZVAL`, `ENMAX`, element/group order, and preferably a file hash;
+- PAW family, release, `TITEL`, `ZVAL`, `ENMAX`, element/group order, and SHA256 hash;
 - `ENCUT`, `KPOINTS`, smearing, `EDIFF`, and any cutoff or precision settings;
 - `ISPIN`, `MAGMOM`, `SAXIS`, SOC/noncollinear choices, and symmetry settings;
 - target channel (`d` or `f`), representative atom index, and species-group mapping;
@@ -88,6 +88,8 @@ Use a minimal, auditable root layout:
 
 Use ASCII directory names where possible. Keep each perturbation point in its own directory. Do not let one point read or overwrite another point's output.
 
+Before creating any stage directory, check whether the target path already exists. Do not overwrite existing directories or input/output files. If a retry is needed, use a new directory name with a clear suffix such as `_retry1` or a timestamp, and record the diagnosis that justified the retry.
+
 ## Workflow
 
 ### 1. Relax or validate the structure
@@ -106,6 +108,8 @@ Do not proceed from a merely completed scheduler job if VASP did not converge or
 ### 2. Build the split-site Reference
 
 Starting from the accepted relaxed `CONTCAR`, make the selected representative atom its own species group. Keep the remaining atoms of that element in a second group and retain all other groups. Preserve atom order.
+
+Record why the selected atom is a valid representative site. Inspect the accepted structure and, after the Reference, the symmetry information in `OUTCAR`; if symmetry, magnetism, defects, charge order, or the local environment makes the atom inequivalent to other candidates, stop and ask whether to run separate representative-site calculations. Use `ISYM=0` only as an explicit recorded choice when symmetry could obscure the intended local perturbation.
 
 For example, `M1 | Mrest | A | B` has species groups `M M A B`, so all species-indexed LDAU arrays have four entries:
 
@@ -126,7 +130,7 @@ LWAVE     = .TRUE.
 LCHARG    = .TRUE.
 ```
 
-The Reference is accepted only when the full output shows normal VASP completion, electronic convergence, a readable final `total charge` table for the representative atom, and nonempty usable `CHGCAR` and `WAVECAR` files. Record the Reference occupation from the same target `d` or `f` column used later; do not substitute a magnetization column.
+The Reference is accepted only when the full output shows normal VASP completion, electronic convergence, a readable final `total charge` table for the representative atom, and nonempty usable `CHGCAR` and `WAVECAR` files. Record the Reference occupation from the same target `d` or `f` column used later; do not substitute a magnetization column. Record SHA256 hashes for the accepted Reference `INCAR`, `POSCAR`, `KPOINTS`, `POTCAR`, `CHGCAR`, `WAVECAR`, submission script, and any generated contract or manifest file.
 
 ### 3. Define and apply the perturbation
 
@@ -152,15 +156,15 @@ For an f target, use `3` in the first `LDAUL` entry. With `LDAUTYPE=3`, equal `L
 
 ### 4. Isolate every restart
 
-Every perturbation point must start from an immutable copy of the accepted Reference files. Never chain one potential point from the previous point.
+Every perturbation point must start from an immutable byte-for-byte copy of the accepted Reference files. Never chain one potential point from the previous point.
 
-For each `V`, create independent copies or links according to the server policy:
+For each `V`, create independent copies; do not use hard links, symbolic links, or shared mutable files for `CHGCAR`, `WAVECAR`, or any point-specific input:
 
 - screened point: Reference `CHGCAR` and `WAVECAR` as starting data;
 - bare point: the same accepted Reference `CHGCAR` and `WAVECAR`;
 - point-specific output: written only inside that point's directory.
 
-Do not submit response points before the Reference passes. Do not reuse a response point's `CHGCAR` or `WAVECAR` as the starting point for another point. Record the source file identity or hash when practical.
+Do not submit response points before the Reference passes. Do not reuse a response point's `CHGCAR` or `WAVECAR` as the starting point for another point. After copying the Reference restart files into a point directory, verify their SHA256 hashes against the accepted Reference hashes before submission.
 
 ### 5. Screened response
 
@@ -171,6 +175,7 @@ ISTART = 1
 ICHARG = 1
 LDAU   = .TRUE.
 LDAUTYPE = 3
+LMAXMIX = 4              # 6 for an f target
 ```
 
 Use convergence settings appropriate to the material. Do not force `NELM=1` merely to create a bare response; a fixed-charge calculation should still produce the required output and a well-defined final projected occupation.
@@ -184,13 +189,14 @@ ISTART = 1
 ICHARG = 11
 LDAU   = .TRUE.
 LDAUTYPE = 3
+LMAXMIX = 4              # 6 for an f target
 ```
 
 Leave `NELM` absent unless the user explicitly requests it or the selected VASP version and workflow require a documented setting. Keep all non-perturbation settings identical to the screened branch. Confirm that `ICHARG=11` actually uses the intended Reference `CHGCAR` and that the resulting `OUTCAR` contains the target projection.
 
 ## Stage gates and monitoring
 
-After the first submitted job, create or update a 10-minute monitor unless the user asks to pause monitoring. At every gate, inspect both scheduler state and complete actual output. While a stage is queued or running, do not claim success or submit downstream stages.
+After the first submitted job, report the job ID, stage directory, and exact check command. Create or update a recurring monitor only when the user explicitly asks for ongoing monitoring. At every gate, inspect both scheduler state and complete actual output. While a stage is queued or running, do not claim success or submit downstream stages.
 
 A stage is accepted only if all relevant checks pass:
 
@@ -199,6 +205,7 @@ A stage is accepted only if all relevant checks pass:
 - required electronic and ionic convergence is present;
 - no fatal VASP, MPI, filesystem, or scheduler error is present;
 - required files are readable and nonempty;
+- stage input and copied Reference restart hashes match the recorded calculation contract;
 - the target `total charge` projection is present and unambiguous.
 
 A failed or ambiguous stage stops downstream progression. Report the reason and preserve evidence; do not automatically retry.
@@ -212,7 +219,7 @@ Read the complete `OUTCAR` for every accepted point. Extract the representative 
 
 Use this identical observable for Reference, screened, and bare data. Label it explicitly as a VASP PAW-projected occupation, not as an absolute orbital population.
 
-Fit:
+Fit with ordinary least squares unless a different fitting model is explicitly requested and recorded:
 
 ```text
 N(V)  = b  + chi  * V       # screened
@@ -222,7 +229,7 @@ U = 1/chi - 1/chi0
 
 Keep units consistent. If occupation is dimensionless and `V` is in eV, `chi` and `chi0` are in `1/eV`, and `U` is in eV.
 
-For each branch, report the complete point table, slope and intercept, slope uncertainty, R², residuals, and any excluded point with a reason. Diagnose:
+For each branch, report the complete point table, slope and intercept, slope standard error, R², residuals, and any excluded point with a reason. Use at least three accepted nonzero perturbation points per branch after exclusions; otherwise do not report a final U. Diagnose:
 
 - nonlinearity or systematic residual curvature;
 - asymmetry between positive and negative perturbations;
@@ -231,7 +238,7 @@ For each branch, report the complete point table, slope and intercept, slope unc
 - sensitivity of U to one-point exclusion;
 - insufficient accepted points or inadequate span around zero.
 
-Do not call a weak, discontinuous, or strongly nonlinear fit a final usable U. Do not average inequivalent sites. Do not change the formula or signs to make U positive. If a diagnostic is needed, propose one physically motivated isolated sensitivity check and obtain authorization before running it.
+Always run and report a leave-one-out sensitivity check for the final accepted point set. Do not call a weak, discontinuous, or strongly nonlinear fit a final usable U. Do not average inequivalent sites. Do not change the formula or signs to make U positive. If an additional diagnostic is needed, propose one physically motivated isolated sensitivity check and obtain authorization before running it.
 
 ## Reporting and completion
 
@@ -239,7 +246,7 @@ Do not perform DFT+U validation unless explicitly requested. When all authorized
 
 - system formula, target channel, representative atom and site-selection rationale;
 - magnetic, SOC/noncollinear, symmetry, smearing, cutoff, and k-point assumptions;
-- PAW metadata, group order, and consistency record;
+- PAW metadata, group order, SHA256 hashes, and consistency record;
 - stage directories, job IDs, scheduler evidence, and acceptance gates;
 - Reference, screened, and bare occupation data with exact `OUTCAR` anchors;
 - fit parameters, uncertainties, R², residuals, exclusions, and units;
